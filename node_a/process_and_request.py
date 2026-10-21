@@ -1,7 +1,9 @@
+
 """Clean a CSV, send it to notebook B, and request predictions."""
 
 from __future__ import annotations
 
+# подключаем библиотеки, которые нужны для работы программы
 import json
 import logging
 import os
@@ -13,10 +15,11 @@ from typing import Any
 import pandas as pd
 from sklearn.datasets import load_iris
 
-
+# настраиваем вывод сообщений о работе программы
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 
+# проверяем настройку из файла .env, например USE_IRIS_FALLBACK
 def _env_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -24,6 +27,7 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+# если исходного csv нет, создаём файл с данными об ирисах
 def create_iris_csv(path: Path, target_column: str) -> pd.DataFrame:
     """Create the fallback labeled dataset when no instructor CSV is present."""
     iris = load_iris(as_frame=True)
@@ -35,6 +39,7 @@ def create_iris_csv(path: Path, target_column: str) -> pd.DataFrame:
     return frame
 
 
+# читаем исходный csv, а если его нет, пробуем создать данные ирисов
 def load_raw_data(raw_path: Path, target_column: str) -> pd.DataFrame:
     if raw_path.is_file():
         return pd.read_csv(raw_path, skip_blank_lines=False)
@@ -45,6 +50,7 @@ def load_raw_data(raw_path: Path, target_column: str) -> pd.DataFrame:
     )
 
 
+# очищаем данные: убираем пустые строки и приводим текст к нижнему регистру
 def clean_data(frame: pd.DataFrame, target_column: str) -> tuple[pd.DataFrame, int, int]:
     original_rows = len(frame)
     cleaned = frame.dropna(how="all").dropna().copy()
@@ -52,6 +58,7 @@ def clean_data(frame: pd.DataFrame, target_column: str) -> tuple[pd.DataFrame, i
         cleaned[column] = cleaned[column].astype("string").str.strip().str.lower()
     cleaned = cleaned.reset_index(drop=True)
 
+    # проверяем, что после очистки остались данные и нужный столбец
     if cleaned.empty:
         raise ValueError("No rows remain after removing blank or incomplete rows.")
     if target_column not in cleaned.columns:
@@ -67,6 +74,7 @@ def clean_data(frame: pd.DataFrame, target_column: str) -> tuple[pd.DataFrame, i
     return cleaned, original_rows, removed_rows
 
 
+# собираем настройки подключения по ssh и проверяем наличие ключа
 def _ssh_base(ssh_key: Path, known_hosts: Path, port: int) -> list[str]:
     if not ssh_key.is_file():
         raise FileNotFoundError(f"SSH private key not found at {ssh_key}.")
@@ -91,6 +99,7 @@ def _ssh_base(ssh_key: Path, known_hosts: Path, port: int) -> list[str]:
     ]
 
 
+# отправляем очищенный csv на ноутбук Б через scp
 def transfer_csv(clean_path: Path) -> None:
     host = os.getenv("NODE_B_HOST", "").strip()
     user = os.getenv("NODE_B_USER", "").strip()
@@ -108,10 +117,12 @@ def transfer_csv(clean_path: Path) -> None:
     remote = f"{user}@{host}"
     remote_dir_arg = shlex.quote(remote_dir)
 
+    # сначала создаём нужную папку на ноутбуке Б
     ssh_command = ["ssh", *_ssh_base(ssh_key, known_hosts, port), remote,
                    f"mkdir -p -- {remote_dir_arg}"]
     subprocess.run(ssh_command, check=True, text=True, capture_output=True)
 
+    # потом копируем туда clean_data.csv
     scp_command = [
         "scp",
         "-i",
@@ -133,6 +144,7 @@ def transfer_csv(clean_path: Path) -> None:
     logging.info("Transferred clean_data.csv to %s:%s.", remote, remote_dir)
 
 
+# отправляем запрос к flask-серверу на ноутбуке Б
 def request_predictions() -> dict[str, Any]:
     host = os.getenv("NODE_B_HOST", "").strip()
     if not host:
@@ -160,6 +172,7 @@ def request_predictions() -> dict[str, Any]:
     return payload
 
 
+# основная часть программы: читаем, очищаем, передаём csv и получаем ответ
 def main() -> None:
     data_dir = Path(os.getenv("DATA_DIR", "/home/DATA"))
     raw_path = Path(os.getenv("RAW_DATA_PATH", str(data_dir / "raw_data.csv")))
@@ -187,5 +200,6 @@ def main() -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
 
+# отсюда начинается выполнение программы
 if __name__ == "__main__":
     main()
